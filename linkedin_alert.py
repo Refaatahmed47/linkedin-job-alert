@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""LinkedIn Job Alert -> Telegram. Standard library only."""
+
+import json
+import os
+import re
+import html
+import random
+import time
+import urllib.parse
+import urllib.request
+import urllib.error
+from pathlib import Path
+
+# ---------------------------------------------------------------- settings
+KEYWORDS = os.environ.get("KEYWORDS", "Business Development Manager")
+LOCATIONS = os.environ.get("LOCATIONS", "Saudi Arabia")
+EXCLUDE = os.environ.get("EXCLUDE", "intern,internship")
+TIME_WINDOW = os.environ.get("TIME_WINDOW", "r7200")
+
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
+STATE_FILE = Path(os.environ.get("STATE_FILE", "seen.json"))
+MAX_REMEMBERED = 800
+MAX_PER_RUN = 12
+
+SEARCH_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+]
+
+
+# ---------------------------------------------------------------- helpers
+def clean(text):
+    return html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", text or ""))).strip()
+
+
+def fetch(url, tries=3):
+    for attempt in range(tries):
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 999, 503) and attempt < tries - 1:
+                time.sleep(5 * (attempt + 1))
+                continue
+            print("[!] HTTP %s on %s" % (e.code, url))
+            return ""
+        except Exception as e:
+            if attempt < tries - 1:
+                time.sleep(3)
+                continue
+            print("[!] request failed: %s" % e)
+            return ""
+    return ""
+
+
+def parse_jobs(page_html):
+    jobs = []
+    for block in re.split(r"<li[\s>]", page_html)[1:]:
+        m = re.search(r"urn:li:jobPosting:(\d+)", block)
+        if not m:
+            continue
+        job_id = m.group(1)
+
+        title = ""
+        t = re.search(r'class="[^"]*base-search-card__title[^"]*"[^>]*>(.*?)</h3>', block, re.S)
+        if t:
+            title = clean(t.group(1))
+
+        company = ""
+        c = re.search(r'class="[^"]*base-search-card__subtitle[^"]*"[^>]*>(.*?)</h4>', block, re.S)
+        if c:
+            company = clean(c.group(1))
+
+        location = ""
+        l = re.search(r'class="[^"]*job-search-card__location[^"]*"[^>]*>(.*?)</span>', block, re.S)
+        if l:
+            location = clean(l.group(1))
+
+        posted = ""
+        p = re.search(r"<time[^>]*>(.*?)</time>", block, re.S)
+        if p:
+            posted = clean(p.group(1))
+
+        jobs.append({
+            "id": job_id,
+            "title": title or "New job",
+            "company": company,
+            "location": location,
+            "posted": posted,
+            "link": "https://www.linkedin.com/jobs/view/%s/" % job_id,
+        })
+    return jobs
+
+
+def send_telegram(text, button_url=None):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("[!] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing")
+        return False
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": "false",
+    }
+    if button_url:
+        payload["reply_markup"] = json.dumps(
+            {"inline_keyboard": [[{"text": "\U0001F517 Open job", "url": button_url}]]}
+        )
+    data = urllib.parse.urlencode(payload).encode()
+    req = urllib.request.Request(
+        "https://api.telegram.org/bot%s/sendMessage" % BOT_TOKEN, data=data
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read()).get("ok", False)
+    except Exception as e:
+        print("[!] telegram error: %s" % e)
+        return False
+
+
+def load_seen():
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except Exception:
+            pass
+    return []
+
+
+def save_seen(ids):
+    STATE_FILE.write_text(json.dumps(ids[-MAX_REMEMBERED:], ensure_ascii=False))
+
+
+# ---------------------------------------------------------------- main
+def main():
+    seen = load_seen()
+    seen_set = set(seen)
+    first_run = not STATE_FILE.exists()
+
+    excluded = [w.strip().lower() for w in EXCLUDE.split(",") if
