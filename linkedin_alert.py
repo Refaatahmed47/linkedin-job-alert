@@ -151,4 +151,57 @@ def main():
     seen_set = set(seen)
     first_run = not STATE_FILE.exists()
 
-    excluded = [w.strip().lower() for w in EXCLUDE.split(",") if
+    excluded = [w.strip().lower() for w in EXCLUDE.split(",") if w.strip()]
+    found = {}
+
+    for kw in [k.strip() for k in KEYWORDS.split(",") if k.strip()]:
+        for loc in [x.strip() for x in LOCATIONS.split(",") if x.strip()]:
+            url = SEARCH_URL + "?" + urllib.parse.urlencode({
+                "keywords": kw,
+                "location": loc,
+                "f_TPR": TIME_WINDOW,
+                "sortBy": "DD",
+                "start": 0,
+            })
+            page = fetch(url)
+            for job in parse_jobs(page):
+                if job["id"] in seen_set or job["id"] in found:
+                    continue
+                if any(w in job["title"].lower() for w in excluded):
+                    continue
+                found[job["id"]] = job
+            time.sleep(2)
+
+    print("[i] new jobs found: %d" % len(found))
+
+    if first_run:
+        save_seen(list(found.keys()))
+        send_telegram(
+            "Job alert is now active.\n"
+            "Search: %s\n"
+            "Location: %s\n"
+            "Tracked %d existing jobs. You will be notified about new ones."
+            % (KEYWORDS, LOCATIONS, len(found))
+        )
+        return
+
+    sent = 0
+    for job in list(found.values())[:MAX_PER_RUN]:
+        msg = (
+            "\U0001F6A8 <b>New job</b>\n\n"
+            "\U0001F4BC <b>" + html.escape(job["title"]) + "</b>\n"
+            "\U0001F3E2 " + html.escape(job["company"]) + "\n"
+            "\U0001F4CD " + html.escape(job["location"]) + "\n"
+            "\U0001F550 " + html.escape(job["posted"]) + "\n\n"
+            + job["link"]
+        )
+        if send_telegram(msg, button_url=job["link"]):
+            sent += 1
+        time.sleep(1)
+
+    save_seen(seen + list(found.keys()))
+    print("[i] alerts sent: %d" % sent)
+
+
+if __name__ == "__main__":
+    main()
