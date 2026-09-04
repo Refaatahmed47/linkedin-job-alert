@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-LinkedIn Job Alert -> Telegram
-يفحص وظايف لينكدإن الجديدة كل بضع دقايق ويبعت إشعار فوري على تليجرام.
-مكتبات قياسية بس - مفيش تنصيب أي حاجة.
-"""
+"""LinkedIn Job Alert -> Telegram. Standard library only."""
 
 import json
 import os
@@ -16,23 +12,18 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-# ---------------------------------------------------------------- الإعدادات
-# غيّر الكلمات دي زي ما تحب (افصل بينهم بفاصلة)
+# ---------------------------------------------------------------- settings
 KEYWORDS = os.environ.get("KEYWORDS", "Business Development Manager")
 LOCATIONS = os.environ.get("LOCATIONS", "Saudi Arabia")
-
-# كلمات لو ظهرت في عنوان الوظيفة يتجاهلها (فاصلة بينهم) - سيبها فاضية لو مش عايز
 EXCLUDE = os.environ.get("EXCLUDE", "intern,internship")
-
-# آخر كام ساعة يدوّر فيها. r3600 = آخر ساعة | r7200 = ساعتين | r86400 = يوم
 TIME_WINDOW = os.environ.get("TIME_WINDOW", "r7200")
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
 STATE_FILE = Path(os.environ.get("STATE_FILE", "seen.json"))
-MAX_REMEMBERED = 800          # كام وظيفة نفتكرها عشان ما نكررش الإشعار
-MAX_PER_RUN = 12              # أقصى عدد إشعارات في التشغيلة الواحدة
+MAX_REMEMBERED = 800
+MAX_PER_RUN = 12
 
 SEARCH_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 
@@ -43,7 +34,7 @@ USER_AGENTS = [
 ]
 
 
-# ---------------------------------------------------------------- أدوات مساعدة
+# ---------------------------------------------------------------- helpers
 def clean(text):
     return html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", text or ""))).strip()
 
@@ -62,23 +53,21 @@ def fetch(url, tries=3):
             with urllib.request.urlopen(req, timeout=30) as r:
                 return r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
-            # 429 / 999 = لينكدإن بيطلب نهدى شوية
             if e.code in (429, 999, 503) and attempt < tries - 1:
                 time.sleep(5 * (attempt + 1))
                 continue
-            print(f"[!] HTTP {e.code} على {url}")
+            print("[!] HTTP %s on %s" % (e.code, url))
             return ""
         except Exception as e:
             if attempt < tries - 1:
                 time.sleep(3)
                 continue
-            print(f"[!] فشل الطلب: {e}")
+            print("[!] request failed: %s" % e)
             return ""
     return ""
 
 
 def parse_jobs(page_html):
-    """يفصل الـ HTML لكروت وظايف."""
     jobs = []
     for block in re.split(r"<li[\s>]", page_html)[1:]:
         m = re.search(r"urn:li:jobPosting:(\d+)", block)
@@ -106,30 +95,40 @@ def parse_jobs(page_html):
         if p:
             posted = clean(p.group(1))
 
-        link = f"https://www.linkedin.com/jobs/view/{job_id}/"
-        jobs.append(
-            {"id": job_id, "title": title or "وظيفة جديدة",
-             "company": company, "location": location, "posted": posted, "link": link}
-        )
+        jobs.append({
+            "id": job_id,
+            "title": title or "New job",
+            "company": company,
+            "location": location,
+            "posted": posted,
+            "link": "https://www.linkedin.com/jobs/view/%s/" % job_id,
+        })
     return jobs
 
 
-def send_telegram(text):
+def send_telegram(text, button_url=None):
     if not BOT_TOKEN or not CHAT_ID:
-        print("[!] TELEGRAM_BOT_TOKEN أو TELEGRAM_CHAT_ID مش مظبوطين")
+        print("[!] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing")
         return False
-    data = urllib.parse.urlencode(
-        {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML",
-         "disable_web_page_preview": "false"}
-    ).encode()
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": "false",
+    }
+    if button_url:
+        payload["reply_markup"] = json.dumps(
+            {"inline_keyboard": [[{"text": "\U0001F517 " + "افتح الوظيفة وقدّم", "url": button_url}]]}
+        )
+    data = urllib.parse.urlencode(payload).encode()
     req = urllib.request.Request(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data=data
+        "https://api.telegram.org/bot%s/sendMessage" % BOT_TOKEN, data=data
     )
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read()).get("ok", False)
     except Exception as e:
-        print(f"[!] تليجرام: {e}")
+        print("[!] telegram error: %s" % e)
         return False
 
 
@@ -146,7 +145,7 @@ def save_seen(ids):
     STATE_FILE.write_text(json.dumps(ids[-MAX_REMEMBERED:], ensure_ascii=False))
 
 
-# ---------------------------------------------------------------- التشغيل
+# ---------------------------------------------------------------- main
 def main():
     seen = load_seen()
     seen_set = set(seen)
@@ -156,11 +155,14 @@ def main():
     found = {}
 
     for kw in [k.strip() for k in KEYWORDS.split(",") if k.strip()]:
-        for loc in [l.strip() for l in LOCATIONS.split(",") if l.strip()]:
-            url = SEARCH_URL + "?" + urllib.parse.urlencode(
-                {"keywords": kw, "location": loc, "f_TPR": TIME_WINDOW,
-                 "sortBy": "DD", "start": 0}
-            )
+        for loc in [x.strip() for x in LOCATIONS.split(",") if x.strip()]:
+            url = SEARCH_URL + "?" + urllib.parse.urlencode({
+                "keywords": kw,
+                "location": loc,
+                "f_TPR": TIME_WINDOW,
+                "sortBy": "DD",
+                "start": 0,
+            })
             page = fetch(url)
             for job in parse_jobs(page):
                 if job["id"] in seen_set or job["id"] in found:
@@ -168,37 +170,38 @@ def main():
                 if any(w in job["title"].lower() for w in excluded):
                     continue
                 found[job["id"]] = job
-            time.sleep(2)  # نهدى بين الطلبات
+            time.sleep(2)
 
-    print(f"[i] وظايف جديدة: {len(found)}")
+    print("[i] new jobs found: %d" % len(found))
 
     if first_run:
-        # أول تشغيل: نسجّل الموجود من غير سبام، والإشعارات تبدأ من بعدها
         save_seen(list(found.keys()))
         send_telegram(
             "✅ <b>تم تفعيل إنذار وظايف لينكدإن</b>\n\n"
-            f"🔎 البحث: {KEYWORDS}\n"
-            f"📍 المكان: {LOCATIONS}\n\n"
-            f"سجّلت {len(found)} وظيفة موجودة حاليًا، وهيوصلك إشعار فوري بأي وظيفة جديدة من دلوقتي."
+            "\U0001F50E " + KEYWORDS + "\n"
+            "\U0001F4CD " + LOCATIONS + "\n\n"
+            "سجّلت %d وظيفة موجودة حاليًا، "
+            "وهيوصلك إشعار فوري "
+            "بأي وظيفة جديدة من دلوقتي." % len(found)
         )
         return
 
     sent = 0
     for job in list(found.values())[:MAX_PER_RUN]:
         msg = (
-            f"🚨 <b>وظيفة جديدة</b>\n\n"
-            f"💼 <b>{html.escape(job['title'])}</b>\n"
-            f"🏢 {html.escape(job['company'])}\n"
-            f"📍 {html.escape(job['location'])}\n"
-            f"🕐 {html.escape(job['posted'])}\n\n"
-            f"{job['link']}"
+            "\U0001F6A8 <b>وظيفة جديدة</b>\n\n"
+            "\U0001F4BC <b>" + html.escape(job["title"]) + "</b>\n"
+            "\U0001F3E2 " + html.escape(job["company"]) + "\n"
+            "\U0001F4CD " + html.escape(job["location"]) + "\n"
+            "\U0001F550 " + html.escape(job["posted"]) + "\n\n"
+            + job["link"]
         )
-        if send_telegram(msg):
+        if send_telegram(msg, button_url=job["link"]):
             sent += 1
         time.sleep(1)
 
     save_seen(seen + list(found.keys()))
-    print(f"[i] اتبعت {sent} إشعار")
+    print("[i] alerts sent: %d" % sent)
 
 
 if __name__ == "__main__":
