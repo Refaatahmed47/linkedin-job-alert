@@ -16,6 +16,8 @@ from pathlib import Path
 KEYWORDS = os.environ.get("KEYWORDS", "Business Development Manager")
 LOCATIONS = os.environ.get("LOCATIONS", "Saudi Arabia")
 EXCLUDE = os.environ.get("EXCLUDE", "intern,internship")
+TITLE_INCLUDE = os.environ.get("TITLE_INCLUDE", "")
+EASY_APPLY = os.environ.get("EASY_APPLY", "true").lower() == "true"
 TIME_WINDOW = os.environ.get("TIME_WINDOW", "r7200")
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -152,22 +154,29 @@ def main():
     first_run = not STATE_FILE.exists()
 
     excluded = [w.strip().lower() for w in EXCLUDE.split(",") if w.strip()]
+    included = [w.strip().lower() for w in TITLE_INCLUDE.split(",") if w.strip()]
     found = {}
 
     for kw in [k.strip() for k in KEYWORDS.split(",") if k.strip()]:
         for loc in [x.strip() for x in LOCATIONS.split(",") if x.strip()]:
-            url = SEARCH_URL + "?" + urllib.parse.urlencode({
+            params = {
                 "keywords": kw,
                 "location": loc,
                 "f_TPR": TIME_WINDOW,
                 "sortBy": "DD",
                 "start": 0,
-            })
+            }
+            if EASY_APPLY:
+                params["f_AL"] = "true"
+            url = SEARCH_URL + "?" + urllib.parse.urlencode(params)
             page = fetch(url)
             for job in parse_jobs(page):
                 if job["id"] in seen_set or job["id"] in found:
                     continue
-                if any(w in job["title"].lower() for w in excluded):
+                title_lc = job["title"].lower()
+                if any(w in title_lc for w in excluded):
+                    continue
+                if included and not any(w in title_lc for w in included):
                     continue
                 found[job["id"]] = job
             time.sleep(2)
