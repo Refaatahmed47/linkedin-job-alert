@@ -2,7 +2,7 @@ name: LinkedIn Job Alert
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "0 */2 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,6 +15,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -22,20 +23,27 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check LinkedIn jobs
+      - name: Watch LinkedIn jobs
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          KEYWORDS: "Business Development Manager"
+          KEYWORDS: "Business Development Manager, Proposal Manager, Bid Manager, Commercial Manager, Facility Manager"
           LOCATIONS: "Saudi Arabia"
-          EXCLUDE: "intern,internship"
-          TIME_WINDOW: "r7200"
-        run: python linkedin_alert.py
-
-      - name: Save seen jobs
+          TITLE_INCLUDE: "business development,bd manager,proposal manager,bid manager,commercial manager,facility manager,partnership"
+          EXCLUDE: "intern,internship,student,graduate"
+          EASY_APPLY: "true"
+          TIME_WINDOW: "r3600"
         run: |
           git config user.name "job-alert-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add seen.json
-          git diff --staged --quiet || git commit -m "update seen jobs [skip ci]"
-          git push
+          END=$(( $(date +%s) + 20700 ))
+          while [ "$(date +%s)" -lt "$END" ]; do
+            python linkedin_alert.py || true
+            if ! git diff --quiet -- seen.json; then
+              git add seen.json
+              git commit -m "update seen jobs [skip ci]"
+              git pull --rebase --autostash || true
+              git push || true
+            fi
+            sleep 150
+          done
