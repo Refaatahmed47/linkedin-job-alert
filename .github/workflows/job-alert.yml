@@ -27,23 +27,29 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          KEYWORDS: "Business Development Manager, Proposal Manager, Bid Manager, Commercial Manager, Facility Manager"
           LOCATIONS: "Saudi Arabia"
-          TITLE_INCLUDE: "business development,bd manager,proposal manager,bid manager,commercial manager,facility manager,partnership"
-          EXCLUDE: "intern,internship,student,graduate"
-          EASY_APPLY: "true"
-          TIME_WINDOW: "r3600"
+          TIME_WINDOW: "r14400"
+          QUERIES: |
+            "Business Development" OR "Business Developer" OR "BD Manager"
+            "Bid Manager" OR "Proposal Manager" OR "Tender Manager" OR "Tendering" OR "Proposals"
+            "Commercial Manager" OR "Commercial Director" OR "Commercial Lead"
+            "Project Manager" OR "Project Management" OR "PMO" OR "Project Director"
+            "Facility Manager" OR "Facilities Manager" OR "Facility Management" OR "Facilities Management"
+            "Sales Manager" OR "Sales Executive" OR "Sales Engineer" OR "Sales Representative" OR "Key Account Manager" OR "Account Manager" OR "Head of Sales"
+            "Business Consultant" OR "Management Consultant" OR "Strategy Consultant" OR "Business Advisor" OR "Consulting Manager"
+          TITLE_INCLUDE: "business development,business developer,bd manager,bd executive,bd lead,bid,bids,bidding,proposal,proposals,tender,tendering,commercial manager,commercial director,commercial lead,head of commercial,project manager,projects manager,project management,project director,project lead,pmo,facility manager,facilities manager,facility management,facilities management,fm manager,head of facilities,sales,key account,account manager,account executive,business consultant,management consultant,strategy consultant,commercial consultant,business advisor,consulting manager,business consulting,management consulting"
+          EXCLUDE: "intern,internship,student,graduate,trainee"
         run: |
           git config user.name "job-alert-bot"
           git config user.email "bot@users.noreply.github.com"
           END=$(( $(date +%s) + 20700 ))
           while [ "$(date +%s)" -lt "$END" ]; do
             python linkedin_alert.py || true
-            if ! git diff --quiet -- seen.json; then
-              git add seen.json
-              git commit -m "update seen jobs [skip ci]"
-              git pull --rebase --autostash || true
-              git push || true
+            git add seen.json status.json jobs.csv 2>/dev/null || true
+            if ! git diff --staged --quiet; then
+              git commit -q -m "update job log [skip ci]"
+              git pull -q --rebase --autostash || true
+              git push -q || true
             fi
             sleep 150
           done
