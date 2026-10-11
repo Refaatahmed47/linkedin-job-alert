@@ -126,10 +126,29 @@ def parse_jobs(page_html):
             "company": company,
             "location": location,
             "posted": posted,
-            "easy_apply": easy,
+            "easy_apply": True if easy else None,
             "link": "https://www.linkedin.com/jobs/view/%s/" % job_id,
         })
     return jobs
+
+
+DETAIL_URL = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/%s"
+
+
+def check_easy_apply(job):
+    """Guest search cards carry no Easy Apply flag; the job page does."""
+    if job["easy_apply"] is not None:
+        return
+    try:
+        page = fetch(DETAIL_URL % job["id"], tries=1)
+    except RateLimited:
+        page = None
+    if not page:
+        return
+    if "apply-link-onsite" in page:
+        job["easy_apply"] = True
+    elif "apply-link-offsite" in page:
+        job["easy_apply"] = False
 
 
 def search(query, location):
@@ -208,11 +227,16 @@ def log_job(job, detected):
         if new_file:
             w.writerow(["detected_utc", "posted", "title", "company", "location", "easy_apply", "link"])
         w.writerow([detected, job["posted"], job["title"], job["company"], job["location"],
-                    "yes" if job["easy_apply"] else "no", job["link"]])
+                    {True: "yes", False: "no"}.get(job["easy_apply"], "unknown"), job["link"]])
 
 
 def format_job(job):
-    apply_line = "⚡ <b>Easy Apply</b>" if job["easy_apply"] else "\U0001F310 تقديم على موقع الشركة"
+    if job["easy_apply"] is True:
+        apply_line = "⚡ <b>Easy Apply</b>"
+    elif job["easy_apply"] is False:
+        apply_line = "\U0001F310 تقديم على موقع الشركة"
+    else:
+        apply_line = "❓ طريقة التقديم غير معروفة"
     return (
         "\U0001F6A8 <b>وظيفة جديدة</b>\n\n"
         "\U0001F4BC <b>" + html.escape(job["title"]) + "</b>\n"
@@ -293,6 +317,8 @@ def main():
     # ---- send everything found; remember only what was actually sent
     sent_ids = []
     for job in found.values():
+        check_easy_apply(job)
+        time.sleep(1)
         if send_telegram(format_job(job), button_url=job["link"]):
             sent_ids.append(job["id"])
             log_job(job, detected)
