@@ -1,1 +1,1 @@
-{"stats": {"cycles": 124, "sent": 58, "errors": 49, "since": "2026-10-19T05:00:04Z"}, "fail_streak": 5, "warned": false, "last_summary": "2026-10-19"}
+{"stats": {"cycles": 125, "sent": 60, "errors": 50, "since": "2026-10-19T05:00:04Z"}, "fail_streak": 6, "warned": true, "last_summary": "2026-10-19"}
